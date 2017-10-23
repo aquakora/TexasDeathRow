@@ -1,30 +1,305 @@
 ---
-title: "Death Row Inmate Analysis"
+title: "Texas Death Row Inmate Analysis"
 author: "Chris Selig"
-date: "October 1, 2017"
-output: html_document
+date: "October 23, 2017"
+output:
+  word_document: default
+  html_document: 
+    theme: spacelab
+tags: R, Topic Modelling, Text Mining, LDA, Death Row
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# Summary
+I am curious about what goes through the mind of someone who was about to be executed for the crimes they committed.  Are they sad? Angry? Full of remorse? This document attempts to solve some of my curiosity by taking a look at the statements of 544 executed people that were on death row in Texas.  This analysis will have three parts:  An exploratory analysis of some basic inmate data that was scraped from the [Texas Department of Criminal Justice Website](http://www.tdcj.state.tx.us/death_row/dr_executed_offenders.html), a look at the last statements themselves, and finally a topic modelling exercise.
+
+You can find the code, data, and writeup of this analysis on my [Github page.](https://github.com/chrisselig/TexasDeathRow)
+
+### The Data
+I scraped basic info from the Texas Department of Criminal Justice website, which included:
+
+1. Execution number
+2. Link for offender information(not used)
+3. Link for last statement
+4. Last Name
+5. First Name
+6. TDCJ Number
+7. Age (at execution)
+8. Execution date
+9. Race
+10. County
+11. Last statement
+
+Unfortunately, data about the crimes committed, education level, date of birth, height, weight, age at time of offence, prior occupation, prior record etc., was mostly in jpeg format so I didn't make an attempt to scrape them.  Some of that data was in tables, but it was a very small percentage of the total amount.
+
+The second dataset used in this analysis is basic info on the number of executions per year.  Columns in this datset include:
+
+1. Year
+2. Counts for number executions per race: white, black, hispanic and other
+
+### Exploratory Analysis - General/Inmate Information 
+
+```{r dataLoad, include=FALSE, message=FALSE, cache=TRUE, warning=FALSE}
+#################################################################### Load Data
+library(ggplot2);library(tidyverse);library(scales);library(forcats)
+
+setwd("G:/Personal/R coding/Rmarkdown/TexasDeathRowInmates/TexasDeathRow")
+
+inmateData <- read.csv2("inmateData.csv", sep = ",", stringsAsFactors = FALSE,na.strings = c("Last Statement:","NA"))
+execPerYearData <- read.csv2("executionsPerYear.csv", sep = ",", stringsAsFactors = FALSE)
+
+#################################################################### Data Processing
+
+### Executed Inmate Data
+inmateData <- inmateData[,c(2,5:12)]
+
+### Executions per year
+execPerYearData <- execPerYearData[,2:11]
+
+inmateData$statements <- iconv(inmateData$statements,"UTF-8","WINDOWS-1252")
 ```
 
-## R Markdown
+A good place to start our analysis is to take a look at the overall number of executions per year.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r execPerYear, cache=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+#Executions per year 
+execuPerYearGraph <- execPerYearData %>%
+  select(year,total_count) %>%
+  ggplot(mapping = aes(x = year, y= total_count))+
+  geom_line()+
+  geom_point()+
+  labs(x = "Year", y = "Execution Count") + 
+  ggtitle("Executions Per Year")+
+  theme_classic()
+```
+```{r execPerYearGraph, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+execuPerYearGraph
 ```
 
-## Including Plots
+The late 1990s and early 2000s seemed to be the peak of the number of executions in Texas with a downward slope overall to the current year.  I should note though, there are 4 more executions scheduled in 2017, so 2017 will have more executions than 2016, but still fewer than 2015.
 
-You can also embed plots, for example:
+Moving on, lets take a look at the breakdown of executions by race.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r execPerRace, cache=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+#Executions by race
+execByRaceGraph <- inmateData %>%
+  select(Race) %>%
+  ggplot(mapping = aes(x = fct_infreq(Race)))+ #fct_infreq from forcats pkg
+  geom_bar(stat = "count")+
+  labs(x = "Race", y = "Count",title = "Execution Count by Race")+
+  theme_classic()
+#Proportion of executions by race
+racePropTable <- inmateData %>%
+  select(Race)
+racePropTable <- table(racePropTable)
+racePropTable<- prop.table(racePropTable)
+blackProp <- round(racePropTable[[1]]*100,1)
+whiteProp <- round(racePropTable[[4]]*100,1)
+hispanicProp <- round(racePropTable[[2]]*100,1)
+```
+```{r execPerRaceGraph, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+execByRaceGraph
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+By far, more white people have been executed versus the other races.  Interestingly enough, there were very few "other" races executed.  
+
+Let's take a look at the demographic data for Texas to see if the counts make sense.  According to the [2010 census](https://en.wikipedia.org/wiki/Demographics_of_Texas), 45.3% of Texans were white, 37.6% were Hispanic, 11.8% were African American.  In comparision the proportion of black people executed was  `r blackProp`%.  That is 3 times the proportion of black people in Texas.  Hispanic inmates made up `r hispanicProp`% of the executed population.
+
+Moving on, let's take a look at the distribution of ages at the time of executions.  The majority of executions are for people in the prime of their lives, between the ages of 30 and 40.  
+
+```{r execAge, cache=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+#Histogram of Ages at time of execution
+execAgeGraph <- inmateData %>%
+  select(Age) %>%
+  ggplot(mapping= aes(Age)) +
+  geom_histogram(binwidth = 5, colour = "black")+
+  labs(x = "Age", y = "Count")+
+  theme_classic()
+execAgeGraph
+```
+```{r execAgeRaceGraph, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+execAgeGraph
+```
+
+For the final section of this exploratory analysis, we look at the top 10 Counties that the executed inmates came from.
+
+```{r execCounty, cache=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+execCountyGraph <- inmateData %>%
+  select(County) %>%
+  group_by(County) %>%
+  summarize(
+    count = n()
+  ) %>%
+  top_n(10) %>%
+  ggplot(mapping = aes(x = County, y = count))+
+  geom_bar(stat = "identity")+
+  labs(x = "County","Count", title = "Top 10 Counties Inmates Came From")+
+  coord_flip()+
+  theme_classic()
+```
+```{r execCountyGraph, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+execCountyGraph
+```
+
+By far, most of the inmates came from Harris County.  Harris County had a population of 4,092,459 as of the [2010 census](https://en.wikipedia.org/wiki/Harris_County,_Texas), and is the third-most populous county in the United States, and most populous in Texas, so it isn't that surprising that it is at the top of the list.  According to [Data USA](https://datausa.io/profile/geo/harris-county-tx/), 16.7% of Harris County lives in poverty.  [Children At Risk](https://en.wikipedia.org/wiki/Harris_County,_Texas) estimates that 38% of children in Harris County will not finish high school.
+
+### Exploratory Analysis - Last Statements
+
+Now that we have explored some basic data about the inmates, let's look at the last statements.  Out of the 544 executions in this dataset, 356 left a statement.  The first step in this part of the analysis was to isolate the last statements, and remove stop (common) words.  After you do this, the most common word is "love", followed by "family", "god" and "life".  Looking at the most common words, there does not appear to be many words you would not expect, and appears that most inmates have reached at least a form of resignation about their fate.
+
+```{r StatementsdataProcessing, include=FALSE, message=FALSE, cache=TRUE, warning=FALSE}
+require(tidytext)
+
+#Tokenize the dataset
+lastStatementsData <- inmateData %>%
+  select(Execution, statements) %>%
+  unnest_tokens(word,statements)
+
+#Remove stop words
+data("stop_words")
+lastStatementStop <- lastStatementsData %>%
+  anti_join(stop_words)
+
+#Visualize most common words
+lastStatementStopGraph <- lastStatementStop %>%
+  na.omit() %>%
+  count(word,sort = TRUE) %>%
+  filter(n>50)%>%
+  mutate(word = reorder(word,n))%>%
+  ggplot(aes(word,n))+
+  geom_col()+
+  xlab(NULL)+ylab("Word Count")+
+  ggtitle("Most Frequent Words") +
+  coord_flip()+
+  theme_classic()
+```
+```{r statementsCommonWords, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+lastStatementStopGraph
+```
+
+Next we will look at both bigrams and trigrams.  Looking at the bigrams first, there are 2 religious references in the top 5.  
+
+```{r bigramCounts, include=FALSE, message=FALSE, cache=TRUE, warning=FALSE}
+#Bigrams
+bigramsData <- inmateData %>%
+  select(Execution, statements) %>%
+  unnest_tokens(bigram,statements,token = "ngrams", n=2) #%>%
+  # count(bigram, sort = TRUE)
+
+#Remove stop words from bigrams
+bigrams_counts <- bigramsData %>%
+  separate(bigram,c("word1","word2"),sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1,word2, sort = TRUE)
+```
+```{r bigramCountsChart, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+knitr::kable(head(bigrams_counts,5))
+```
+
+I am curious to know if the inmates were religious before they were placed into prison, but I do not have that data.  
+
+```{r trigramCounts, include=FALSE, message=FALSE, cache=TRUE, warning=FALSE}
+
+#Trigrams
+trigramsData <- inmateData %>%
+  select(Execution,statements) %>%
+  unnest_tokens(trigram,statements, token="ngrams",n=3) 
+
+#Trigrams Separated, looking for "not" or "innocent" to see sentiment
+wordsToSearch <- c("not", "innocent")
+trigrams_separated <- trigramsData %>%
+  separate(trigram,c("word1","word2","word3"),sep = " ") %>%
+  filter(word1 %in% wordsToSearch) %>%
+  count(word1,word2,word3, sort = TRUE)
+```
+
+
+The trigrams were mostly uninteresting as they had alot of religious references.  So, I decided to take a bit different approach.  I was curious to know if the inmates would proclaim their innocence before their execution.  So, I searched for the trigrams that included "not" and "innocent" thinking that "not guilty" or "am innocent" might appear frequently.
+
+```{r trigramCountsChart, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+knitr::kable(head(trigrams_separated,6))
+```
+
+There are definitely a few references to being innocent, but not as many as I would have thought.  Of note, references to the Lord's Prayer is pretty common.
+
+For the last bit of analysis, we will look at the correlations between words.  The plot belows shows the correlation between various words.  All correlations are greater than or equal to 0.5.
+
+```{r correlations, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+#Correlations
+require(widyr);require(ggraph);require(igraph)
+
+#Most common pairs of words that co-appear within the same section
+word_pairs <- lastStatementStop %>%
+  pairwise_count(word,Execution, sort = TRUE)
+
+#correlations
+word_cor <- lastStatementStop %>%
+  group_by(word)%>%
+  filter(n()>20) %>%
+  pairwise_cor(word,Execution,sort = TRUE)
+
+set.seed(5)
+corNetworkPlot <- word_cor %>%
+  filter(correlation >= .50) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation),show.legend = FALSE) + 
+  geom_node_point(color = "darkblue",size = 2)+
+  geom_node_text(aes(label = name),repel = TRUE)+
+  theme_void()
+```
+```{r corPlot, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+corNetworkPlot
+```
+
+In the chart above, "Jesus" and "Christ" are  highly correlated, but not surprising.  I find the correlation between "caused" and "pain" interesting as it is a reference, in most cases, the inmates remorse for committing murder.
+
+### Topic Modelling
+
+The last section of this analysis is an attempt at topic modelling to see how the inmates are feeling right before their executions.  Topic modelling in this exercise will use the [Latent Dirichlet allocation (LDA)](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation) statistical model.  The LDA model treats each document (last statement in our case) as a mixture of topics and each topic as a mixture of words.  Documents can overlap each other in terms of content rather than being separated into discrete groups.
+
+The LDA model is guided by two principals.
+
+1. Every document is a mixture of topics:  This means that each document may contain words from several topics in particular proportions.
+
+2. Every topic is a mixture of words:  For example, if a topic is a financial news source, you could see the words "earnings", "stocks", or "bonds".  Also important is that words can be shared across topics.  
+
+Therefore, LDA is a method of estimating both at the same time:  finding the mixture of words that is associated with a topic, but also determining the mixture of topics that describes each document.
+
+Applying the model, estimating four topics, these are the top 10 terms for each topic, and their associated betas (probabilities).
+```{r topicProcessing, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+require(topicmodels)
+
+#Create a document term matrix to use in the modelling
+statements_dtm <- inmateData %>%
+  select(Execution, statements) %>%
+  unnest_tokens(word,statements) %>%
+  anti_join(stop_words) %>%
+  count(Execution,word) %>%
+  cast_dtm(Execution,word,n)
+
+#Creating LDA model, using 4 topics.  Chosen from the Network Plot in the exploratory analysis
+statementsLDA <- LDA(statements_dtm, k = 4,control = list(seed = 1234))
+
+#Extract beta(per-topic-per-word probabilities) from model
+statements_topics <- tidy(statementsLDA, matrix = "beta")
+
+#Plot 10 top terms for each topic
+topTermsPlot <- statements_topics %>%
+  group_by(topic) %>%
+  top_n(10,beta) %>%
+  ungroup() %>%
+  arrange(topic,-beta) %>%
+  mutate(term = reorder(term,beta)) %>%
+  ggplot(aes(term,beta,fill = factor(topic))) +
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~topic, scales= "free")+
+  coord_flip()+
+  theme_classic()
+```
+```{r topicsPlot, warning=FALSE, cache=TRUE, message=FALSE, echo=FALSE}
+topTermsPlot
+
+```
+
+All four topics look pretty much the same, using the same words.  All four mention love, family, and religion.  Even after both reducing the number of topics in the model to two, and even increasing to 15, I was left with pretty much the same answer:  most inmates were both remorseful, and wanted to wish their loved ones the best.  A considerable amount also  had religious references, and very few seemed angry.
